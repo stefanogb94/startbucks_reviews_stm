@@ -1,0 +1,213 @@
+---
+title: "Starbucks_reviews_STM"
+author: "SGB"
+date: "2025-01-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#loading libraries
+library(httr)
+library(jsonlite)
+library(tidyverse)
+library(readr)
+library(lubridate)
+library(tidytext)
+library(textstem)
+library(stm)
+```
+
+## 1) Download, unzip and load our reviews dataset
+
+This dataset
+
+```{r}
+
+# Set Kaggle credentials
+Sys.setenv(KAGGLE_CONFIG_DIR = "../../Kaggle/kaggle")  
+
+# Download the dataset
+system("kaggle datasets download -d harshalhonde/starbucks-reviews-dataset")
+
+# Unzip the dataset
+unzip("starbucks-reviews-dataset.zip", exdir = "../data/starbucks_reviews")
+
+#last read reviews dataset
+raw_reviews <- read_csv('../data/starbucks_reviews/reviews_data.csv')
+
+head(raw_reviews)
+
+```
+
+## 2) Clean & transform our dataset
+
+You can also embed plots, for example:
+
+```{r, echo=FALSE}
+#calculating the length of the review comments
+raw_reviews <- raw_reviews %>% mutate(rev_length = nchar(Review))
+
+#adding  a dummy if it contains an image in the review
+raw_reviews <- raw_reviews %>% 
+  mutate(image = case_when(Image_Links == "['No Images']"~ 0, .default= 1))
+
+#casting ratings as integer 
+raw_reviews$Rating <- as.integer(raw_reviews$Rating)
+
+#extract date from string Date column
+raw_reviews <- raw_reviews %>% 
+  mutate(dt = substring(Date,10)) %>% 
+  mutate(dt = case_when(grepl('Jan.', dt) ~ gsub('Jan.', 'January', dt),
+                        grepl('Feb.', dt) ~ gsub('Feb.', 'February', dt),
+                        grepl('Aug.',dt) ~ gsub('Aug.' , 'August', dt),
+                        grepl('Sept.',dt) ~ gsub('Sept.', 'September', dt),
+                        grepl('Oct.',dt) ~ gsub('Oct.', 'October', dt),
+                        grepl('Nov.',dt) ~ gsub('Nov.', 'November', dt),
+                        grepl('Dec.',dt) ~ gsub('Dec.', 'December', dt), 
+                        .default = dt)) %>% 
+  mutate(dt = mdy(dt))
+
+#removing empty reviews
+raw_reviews <- raw_reviews %>% filter(rev_length > 14)
+
+#selecting only relevant columns
+raw_reviews <- raw_reviews%>% select(-name, -Date, -Image_Links)
+
+
+```
+
+## 3) Tokenize and Lemmatize all reviews
+
+```{r}
+#creating an id column as key
+raw_reviews <- raw_reviews%>% rownames_to_column('id')
+
+#tokenize & lemmatize words
+tidy_reviews<- raw_reviews %>% unnest_tokens(word,Review) %>%
+  mutate(word= lemmatize_words(word))
+```
+
+## 4) Detecting words, numbers and special characters to remove
+
+Firs step is detecting these 'words' that provide no inisght
+
+```{r}
+#numbers to exclude
+numbers <- tidy_reviews %>% 
+    filter(str_detect(word, "^[0-9]")) %>% 
+    select(word) %>% 
+    unique()
+
+#repetitve words 
+my_stop_words <- tibble(
+    word = c("Starbucks", 'starbucks', "starbuck's",'los', "i’ve", 	
+    "it’s","didn't", "can’t", "won’t"))
+
+#removing those words
+tidy_reviews <- 
+    tidy_reviews %>% 
+    anti_join(stop_words) %>%
+    anti_join(my_stop_words) %>%
+    anti_join(numbers, by = "word") %>% 
+    select(-Rating, -location, -image, -dt, -rev_length)
+```
+
+Also words that occur sparsely as they are difficult to categorize into a topic. Veryshort words such as initial normally don't add much value.
+
+```{r}
+#creating the word count and extra filtering
+word_counts <- tidy_reviews%>% 
+  group_by(word) %>% 
+  count(sort=TRUE) %>% 
+  filter(n > 5) %>% 
+  filter(nchar(word) >= 3) 
+
+#filter words in those reviews to include only those in the word count
+tidy_reviews <- tidy_reviews %>% 
+  filter(word %in% word_counts$word) 
+```
+
+## **5)** Creating the document-term matrix
+
+```{r}
+#counting the occurrence of each word for each review
+doc_word_counts<-tidy_reviews %>% 
+  group_by(id,word)%>% 
+  count(sort=TRUE)%>% 
+  bind_tf_idf(word, id, n)
+
+idf_lower<- as.numeric(quantile(doc_word_counts$idf, 0.05))
+
+idf_upper <- as.numeric(quantile(doc_word_counts$idf, 0.95))
+
+doc_word_counts <- doc_word_counts %>% 
+  filter(idf > idf_lower & idf < idf_upper) %>%
+  select(id, word, n)
+
+
+#creating the matrix
+dtm<- doc_word_counts%>% cast_sparse(id,word,n)
+```
+
+## 6) The FUN PART! Estimate the Topic Models
+
+```{r}
+start<- Sys.time()
+reviews_lda_k6 <-
+  stm(dtm,
+      K = 6,
+      # seed fixes the random number draw
+      # so we should all get the same results
+      seed = 123456789)
+end <-Sys.time()
+elapsed <- end-start
+print(elapsed)
+```
+
+```{r}
+labelTopics(reviews_lda_k6)
+```
+
+## 7) Trial & Error!
+
+```{r}
+start<- Sys.time()
+reviews_lda_k5 <-
+  stm(dtm,
+      K = 5,
+      # seed fixes the random number draw
+      # so we should all get the same results
+      seed = 123456789)
+end <-Sys.time()
+elapsed <- end-start
+print(elapsed)
+```
+
+```{r}
+#check terms within each topic to check its coherence
+labelTopics(reviews_lda_k5)
+```
+
+## 8) Labeling the Topics!
+
+For this dataset, I went for the 5 topic estimation as there is no overlapping between topics and each topic can be interpreted clearly. However its always important to experiment and consider the objective of the analysis for deciding which solution to choose.
+
+**Topic 1 –\> Food quality & service.** The first topic contains overall terms related to food quality and the service related to it.
+
+**Topic 2 –\> Loyalty program & payment.** Next topic is related to Starbucks reward program and contains words that relate to the payment issues like refunds, account, or alternative payments like gift cards, etc.
+
+**Topic 3 –\> Drive-thru.** In this specific topic, words related to the drive-thru service & could hint to reviews complaining about waiting times.
+
+**Topic 4 –\> Store staff service.** This topic contains words closely related to employee attitude, most of them having a negative connotation.
+
+**Topic 5 –\>Drink customization**. It contains words related to drink sizes, ingredients and price. For everybody who has ordered a Starbucks knows their particular sizing names and pricing.
+
+```{r}
+#plotting topic proportions
+plot.STM(reviews_lda_k5, type = "summary")
+
+```
