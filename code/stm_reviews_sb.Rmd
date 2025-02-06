@@ -9,7 +9,9 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r}
+## Introduction to Structured Topic Modeling
+
+```{r, echo=FALSE}
 #loading libraries
 library(httr)
 library(jsonlite)
@@ -23,7 +25,7 @@ library(stm)
 
 ## 1) Download, unzip and load our reviews dataset
 
-This dataset
+This dataset is openly availables online and contains web scraped reviews for Starbucks across many different locations and during a somewhat long period of time. For downloading it I use a connection to kaggle API and then unzip for reading it. Each review contains a date, location, name and most of them contains a corresponding rating scaled from 1 to 5.
 
 ```{r}
 
@@ -45,7 +47,7 @@ head(raw_reviews)
 
 ## 2) Clean & transform our dataset
 
-You can also embed plots, for example:
+Now that we have opened the file lets transform into something nice, tidy and with consistency. Its important to cast data types, reformat, and remove inconsistent fields or incomplete records like NAs.
 
 ```{r, echo=FALSE}
 #calculating the length of the review comments
@@ -82,6 +84,10 @@ raw_reviews <- raw_reviews%>% select(-name, -Date, -Image_Links)
 
 ## 3) Tokenize and Lemmatize all reviews
 
+Once having a more structured and tidy dataset, let's add an id to each review or document so we can using later in the analysis. After this intermediate step we need to prepare our reviews for the analysis, therefore we need to tokenize the words within each review posted. Tokenize means basically breaking down or splitting a document into tokens which in this case are words. After creating the tokens its time to lemmatize to be able to properly count terms, which in short is reversing words to their root or base word. Normally means removing suffixes, plural or conjugations of a verb. (e.g. Running –\> run).
+
+![](images/Untitled.png)
+
 ```{r}
 #creating an id column as key
 raw_reviews <- raw_reviews%>% rownames_to_column('id')
@@ -93,7 +99,7 @@ tidy_reviews<- raw_reviews %>% unnest_tokens(word,Review) %>%
 
 ## 4) Detecting words, numbers and special characters to remove
 
-Firs step is detecting these 'words' that provide no inisght
+Firs step is detecting these 'words' that provide no meaning to the text or insight to our analysis. We can start by removing stop words like articles, pronouns, prepositions and conjunctions. Then we do the same for numbers and in this case the obvious repetitive 'Starbucks' term and its variations.
 
 ```{r}
 #numbers to exclude
@@ -102,12 +108,12 @@ numbers <- tidy_reviews %>%
     select(word) %>% 
     unique()
 
-#repetitve words 
+#repetitve words that provide no true meaning
 my_stop_words <- tibble(
     word = c("Starbucks", 'starbucks', "starbuck's",'los', "i’ve", 	
     "it’s","didn't", "can’t", "won’t"))
 
-#removing those words
+#removing those stop words and numbers
 tidy_reviews <- 
     tidy_reviews %>% 
     anti_join(stop_words) %>%
@@ -116,7 +122,7 @@ tidy_reviews <-
     select(-Rating, -location, -image, -dt, -rev_length)
 ```
 
-Also words that occur sparsely as they are difficult to categorize into a topic. Veryshort words such as initial normally don't add much value.
+Also terms that occur sparsely as they are difficult to categorize into a topic.
 
 ```{r}
 #creating the word count and extra filtering
@@ -131,7 +137,23 @@ tidy_reviews <- tidy_reviews %>%
   filter(word %in% word_counts$word) 
 ```
 
-## **5)** Creating the document-term matrix
+## **5)** Creating the document-term matrix for relevant words
+
+In this step we create a **document term matrix**, this matrix counts the occurrence of words across every document or review in the dataset. For a quick illustration check image below
+
+![](images/Example-of-document-term-matrix-Unigram.png)
+
+For a more systematic word filtering we can calculate **TF** - **IDF** stats. These measure how often a word occurs in a document and across a sample of documents.
+
+**Term Frequency (TF)** : represents the number of occurrences of a given word or term in a document.
+
+TF = count of term in document / number of words in document
+
+**Inverse Document Frequency (IDF)**: this is very similar but instead of the frequency in a particular document, document frequency is the number of occurrences in the whole document set.
+
+IDF = log(total number of documents / documents that contain the term )
+
+The IDF value can be used how 'relevant' a term is in the document corpus. For example words that appear in almost every review like 'coffee' or 'drink' would have a low IDF value and terms that appear in few documents would have a high value. So for limiting these extremes we can filter out these terms from our document term matrix before calculating the topics. Here I used the 5% and 95% percentiles as cut-off values.
 
 ```{r}
 #counting the occurrence of each word for each review
@@ -155,6 +177,10 @@ dtm<- doc_word_counts%>% cast_sparse(id,word,n)
 
 ## 6) The FUN PART! Estimate the Topic Models
 
+Now its time to estimate the model, in this case I am going for 6 topics as a fresh start. The number of topics is defined by parameter ***k*** . The number of topics will depend on how specific you want your analysis to be but also on how the estimation works out. Sometimes the dataset is not bing enough or reviews are very closely related that increasing the number of topics wouldn't make sense.
+
+Note: Generally a seed is used to be able to replicate the results
+
 ```{r}
 start<- Sys.time()
 reviews_lda_k6 <-
@@ -168,11 +194,15 @@ elapsed <- end-start
 print(elapsed)
 ```
 
+Here you can find the words and terms associated with each of the six topics.
+
 ```{r}
 labelTopics(reviews_lda_k6)
 ```
 
 ## 7) Trial & Error!
+
+In this case we are testing a model estimation with 5 topics to see the difference. Feel free to experiment with more or less topics!
 
 ```{r}
 start<- Sys.time()
@@ -194,20 +224,63 @@ labelTopics(reviews_lda_k5)
 
 ## 8) Labeling the Topics!
 
-For this dataset, I went for the 5 topic estimation as there is no overlapping between topics and each topic can be interpreted clearly. However its always important to experiment and consider the objective of the analysis for deciding which solution to choose.
+For this dataset, I went for the 5 topic estimation as there is no overlapping between topics and each topic can be interpreted clearly without being very broad. However its always important to experiment and consider the objective of the analysis for deciding which solution to choose for each case. In my perspective in the 6 topic model topics 2 and 6 kind of overlapped, plus topic 3 was very broad and hard to assign a concept or aspect of Starbucks service or products.
 
 **Topic 1 –\> Food quality & service.** The first topic contains overall terms related to food quality and the service related to it.
 
 **Topic 2 –\> Loyalty program & payment.** Next topic is related to Starbucks reward program and contains words that relate to the payment issues like refunds, account, or alternative payments like gift cards, etc.
 
-**Topic 3 –\> Drive-thru.** In this specific topic, words related to the drive-thru service & could hint to reviews complaining about waiting times.
+**Topic 3 –\> Drive-thru service.** In this specific topic, words related to the drive-thru service & could hint to reviews complaining about waiting times.
 
 **Topic 4 –\> Store staff service.** This topic contains words closely related to employee attitude, most of them having a negative connotation.
 
-**Topic 5 –\>Drink customization**. It contains words related to drink sizes, ingredients and price. For everybody who has ordered a Starbucks knows their particular sizing names and pricing.
+**Topic 5 –\>Drink customization**. It contains words related to drink/cup sizes, ingredients and price. For everybody who has ordered a Starbucks knows their particular sizing names and pricing.
 
 ```{r}
 #plotting topic proportions
 plot.STM(reviews_lda_k5, type = "summary")
+
+```
+
+## 9) Assigning Topics to the Reviews.
+
+In this step merging the highest gamma with the original review dataset. See gamma as a 'score' that tells how much that review is associated to a particular topic. So the topic with highest gamma can be associated with the review.
+
+```{r}
+#select the most relevant topic for each review
+reviews_gamma <- 
+    tidy(reviews_lda_k5, 
+         matrix = "gamma",
+         document_names = rownames(dtm)) %>%
+    rename(id = document) %>% 
+    group_by(id) %>%
+    slice_max(gamma)
+
+
+
+#merge data with the original review dataset
+topic_reviews <- raw_reviews %>% left_join(reviews_gamma, by = 'id')
+
+#adding topic labels
+topic_reviews <- topic_reviews %>% 
+  mutate(topic_name = case_when(topic == 1 ~ 'Food quality & service',
+                                topic == 2 ~ 'Loyalty program & payment',
+                                topic == 3 ~ 'Drive-thru service',
+                                topic == 4 ~ 'Store staff service',
+                                topic == 5 ~ 'Drink customization' ))
+
+```
+
+## 10) Grab insights and summarize findings!
+
+Finally its time to understand what's hidden in the original dataset. The table below summarizes some general insights for each topic like the number of reviews that mostly relate to the topic, as well as some stats about review length and ratings. As shown **Food quality & service** topic has the most reviews and the higher average rating, as no other topic has an avg. rating greater than 2.0. If we think about it this means probably most of the reviews on the other four topics are negative comments. This means Starbucks issues or negative feedback revolves mostly in other areas. Diving deeper into the analysis confirms this, as the review length stats show that **Food quality & service** reviews are shorter and this effect has been described in research, where users' positive reviews usually are less common and shorter in length compared to negative reviews. Additionally the topic that contains the most images attached to the review is the one related to **Loyalty program & payment** with roughly \~10% .
+
+```{r}
+topic_reviews %>% group_by(topic_name)%>% 
+  summarize(n_reviews= n(), n_ratings = sum(!is.na(Rating)),
+            avg_rating = round(mean(Rating, na.rm= TRUE),2), 
+            median_length = median(rev_length),
+            avg_length = round(mean(rev_length),2),
+            image = round(sum(image)*100/n(),2))
 
 ```
